@@ -116,7 +116,7 @@ init("nfs://"++URL) ->
     real_root = RealRoot,
     root = RealRoot,
     fsinfo = FSInfo,
-    read_size = lists:min([RTpref,4096])
+    read_size = lists:min([RTpref,65536])
   },
 
   {ok, Root, Remote2} = mkdir_p(Remote1, MountPath),
@@ -189,7 +189,7 @@ bad_segments() ->
   [<<"/">>, <<".">>, <<"..">>, <<"">>].
 
 join([]) -> <<>>;
-join(Segments) -> filename:join(Segments).
+join(Segments) -> filename:join([Seg || Seg <- Segments, not lists:member(Seg, bad_segments())]).
 
 
 
@@ -264,12 +264,88 @@ list_dir(#remote{c = C, cookie_verf = CV1} = Remote, Path) ->
   end.
 
 
-read_entries({_,Path,_,Next}) when Path == <<".">> orelse Path == <<"..">> ->
-  read_entries(Next);
 
-read_entries({Id,Path,Cookie,Next}) ->
-  [{Path,Id,Cookie}|read_entries(Next)];
+scan(Remote) ->
+  scan(Remote, "").
+
+scan(Remote, Path) ->
+  {ok, {Obj, _}, Remote1} = lookup_path(Remote, Path),
+  R = scan1(Remote1, [], [{join(split(Path)),Obj}], []),
+  R.
+
+
+  % case nfs_prot3_clnt:nfsproc3_readdir_3(C, {{Obj}, 0, CV1, 1024*1024}) of
+  %   {ok, {'NFS3_OK', {_Attr,CV2,{Dirs,true}}}} ->
+  %     {ok, lists:sort([F || {F,_,_} <- read_entries(Dirs)]), Remote1#remote{cookie_verf = CV2}};
+  %   {ok, {'NFS3ERR_NOTDIR', _}} ->
+  %     {error, enotdir}
+  % end.
+
+scan1(Remote, Replies, [], []) ->
+  {ok, Replies, Remote};
+
+scan1(Remote, Replies, JobQueue, RunQueue) when JobQueue == [] orelse length(RunQueue) > 100 ->
+  scan1_wait(Remote, Replies, JobQueue, RunQueue);
+
+scan1(#remote{cookie_verf = CV1, c = C} = Remote, Replies, [{Path,Obj}|JobQueue], RunQueue) ->
+  ReadDirPlus = {{Obj}, 0, CV1, 128*1024*1024, 128*1024*1024},
+  Call = {call, 17, [nfs_prot3_xdr:enc_readdirplus3args(ReadDirPlus)], 1000},
+  Ref = make_ref(),
+  GenCall = {'$gen_call', {self(), Ref}, Call},
+  C ! GenCall,
+  scan1(Remote, Replies, JobQueue, [{Ref, Path, Obj}|RunQueue]).
+
+
+scan1_wait(#remote{cache = Cache} = Remote, Replies, JobQueue, RunQueue) ->
+  length(RunQueue) > 0 orelse error(error_wait),
+  % {ok, Stats} = rpc_client:get_stats(Remote#remote.c),
+  % Pending = proplists:get_value(pending_requests, Stats),
+  % io:format("JobQueue: ~B,  Run queue: ~B/~p (~p)~n", [length(JobQueue), length(RunQueue), Pending, RunQueue]),
+  receive
+    {Ref, {ok, XDR}} when is_reference(Ref) ->
+      {value, {Ref, Path, _Obj}, RunQueue1} = lists:keytake(Ref, 1, RunQueue),
+      {{'NFS3_OK', {_Attr, CV2, {Entries, true}}}, _} = nfs_prot3_xdr:dec_readdirplus3res(XDR, 0),
+      PathEntries = [E#entry{path = join([Path, P])} || #entry{path = P} = E <- read_entries(Entries), 
+        P =/= <<".">> andalso P =/= <<"..">>],
+      Cache1 = lists:ukeymerge(#entry.path, lists:sort(PathEntries), Cache),
+      SubDirs = [{P,O} || #entry{path = P, object = O, attr = #file_info{type = directory}} <- PathEntries],
+      SubFiles = [P || #entry{path = P, attr = #file_info{type = regular}} <- PathEntries],
+      % io:format("SubDirs: ~p, SubFiles: ~p~n", [[P || {P,_} <- SubDirs], SubFiles]),
+      scan1(Remote#remote{cache = Cache1, cookie_verf = CV2}, SubFiles ++ Replies, SubDirs ++ JobQueue, RunQueue1);
+    {Ref, {error, timeout}} ->
+      {value, {Ref, Path, Obj}, RunQueue1} = lists:keytake(Ref, 1, RunQueue),
+      io:format("timeout scan ~s~n",[Path]),
+      scan1(Remote, Replies, [{Path,Obj}|JobQueue], RunQueue1)
+  end.
+
+read_entries({_,Path,_,{true,Attr},{true,{Obj}},Next}) ->
+  [#entry{path = Path, object = Obj, attr = attr(Attr)}|read_entries(Next)];
 read_entries(void) -> [].
+
+
+
+% scan1(Remote, ScanQueue, WorkQueue) ->
+%   case list_dir(Remote, Path) of
+%     {ok, Files, Remote1} ->
+%       io:format("list(~s) -> ~B~n", [Path, length(Files)]),
+
+%       {Total, Remote2} = lists:foldl(fun(File, {Total_, Remote1_}) ->
+%         {ok, List, Remote2_} = scan1(Remote1_, filename:join(Path, File)),
+%         {Total_ ++ List, Remote2_}
+%       end, {[], Remote1}, Files),
+
+%       {ok, Total, Remote2};
+%     {error, enotdir} ->
+%       {ok, [Path], Remote}
+%   end.
+
+
+
+
+
+
+
+
 
 
 mkdir_p(#remote{c = C} = Remote, Path) ->
@@ -355,28 +431,5 @@ delete_r1(#remote{c = C, cookie_verf = CV1} = Remote, Dir, [Segment|Segments], P
   {ok, Remote3#remote{cookie_verf = CV2}}.
 
 
-
-scan(Remote) ->
-  scan(Remote, "").
-
-scan(Remote, Path) ->
-  R = scan1(Remote, Path),
-  R.
-
-
-scan1(Remote, Path) ->
-  case list_dir(Remote, Path) of
-    {ok, Files, Remote1} ->
-      io:format("list(~s) -> ~B~n", [Path, length(Files)]),
-
-      {Total, Remote2} = lists:foldl(fun(File, {Total_, Remote1_}) ->
-        {ok, List, Remote2_} = scan1(Remote1_, filename:join(Path, File)),
-        {Total_ ++ List, Remote2_}
-      end, {[], Remote1}, Files),
-
-      {ok, Total, Remote2};
-    {error, enotdir} ->
-      {ok, [Path], Remote}
-  end.
 
 
