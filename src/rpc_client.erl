@@ -220,7 +220,7 @@ init([Host, Program, Version, Proto, Port]) ->
 			    {stop, {connect, R}}
 		    end;
 		udp ->
-		    {ok, Sock} = gen_udp:open(0, [binary]),
+		    {ok, Sock} = gen_udp:open(0, [binary,{recbuf, 131072}]),
 		    ok = gen_udp:connect(Sock, IP, Port),
 		    {ok, S1#state{ip = IP, socket = Sock}};
 		_ ->
@@ -424,7 +424,6 @@ make_call1(From, Size, Call, Timeout, S, Procedure) when S#state.proto == tcp ->
     end;
 
 make_call1(From, Size, Call, Timeout, S, Procedure) when S#state.proto == udp ->
-    % io:format("~p\n", [list_to_binary([Call])]),
     case gen_udp:send(S#state.socket, Call) of
 	ok ->
 	    Timer = erlang:send_after(S#state.retry_timeout, self(),
