@@ -39,9 +39,10 @@ main(["scan", URL]) ->
   ok;
 
 
-main(["read", URL, Path]) ->
+main(["read", URL]) ->
   code:add_pathz("ebin"),
-  {ok, Remote} = nfs3:init(URL),
+  {match, [Mount,Path]} = re:run(URL, "(.*)//(.*)", [{capture,all_but_first,list}]),
+  {ok, Remote} = nfs3:init(Mount),
   T1 = erlang:now(),
   {ok, Bin, _Remote1} = nfs3:read_file(Remote, Path),
   T2 = erlang:now(),
@@ -49,24 +50,26 @@ main(["read", URL, Path]) ->
   ok;
 
 
-main(["write", URL, Path, Content]) ->
+main(["write", URL, Content]) ->
   code:add_pathz("ebin"),
-  {ok, Remote} = nfs3:init(URL),
+  {match, [Mount,Path]} = re:run(URL, "(.*)//(.*)", [{capture,all_but_first,list}]),
+  {ok, Remote} = nfs3:init(Mount),
   {ok, Obj, _Remote1} = nfs3:create(Remote, Path),
   ok = nfs3:write(Remote, Obj, 0, iolist_to_binary([Content, "\n"])),
   ok;
 
 
-main(["delete", URL, Path]) ->
+main(["delete", URL]) ->
   code:add_pathz("ebin"),
-  {ok, Remote} = nfs3:init(URL),
+  {match, [Mount,Path]} = re:run(URL, "(.*)//(.*)", [{capture,all_but_first,list}]),
+  {ok, Remote} = nfs3:init(Mount),
   nfs3:delete_r(Remote, Path),
   ok;
 
 
 main([]) ->
   io:format("scan nfs://uid:gid@host/mount//root\n"),
-  io:format("read nfs://uid:gid@host/mount//root path/to/file\n"),
-  io:format("write nfs://uid:gid@host/mount//root path/to/file text\n"),
-  io:format("delete nfs://uid:gid@host/mount//root path/to/file\n"),
+  io:format("read nfs://uid:gid@host/mount//path/to/file\n"),
+  io:format("write nfs://uid:gid@host/mount//path/to/file text\n"),
+  io:format("delete nfs://uid:gid@host/mount//path/to/file\n"),
   ok.
