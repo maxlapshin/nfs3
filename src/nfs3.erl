@@ -305,8 +305,7 @@ scan1_wait(#remote{cache = Cache} = Remote, Replies, JobQueue, RunQueue) ->
     {Ref, {ok, XDR}} when is_reference(Ref) ->
       {value, {Ref, Path, _Obj}, RunQueue1} = lists:keytake(Ref, 1, RunQueue),
       {{'NFS3_OK', {_Attr, CV2, {Entries, true}}}, _} = nfs_prot3_xdr:dec_readdirplus3res(XDR, 0),
-      PathEntries = [E#entry{path = join([Path, P])} || #entry{path = P} = E <- read_entries(Entries), 
-        P =/= <<".">> andalso P =/= <<"..">>],
+      PathEntries = [E#entry{path = join([Path, P])} || #entry{path = P} = E <- read_entries_plus(Entries)],
       Cache1 = lists:ukeymerge(#entry.path, lists:sort(PathEntries), Cache),
       SubDirs = [{P,O} || #entry{path = P, object = O, attr = #file_info{type = directory}} <- PathEntries],
       SubFiles = [P || #entry{path = P, attr = #file_info{type = regular}} <- PathEntries],
@@ -318,10 +317,19 @@ scan1_wait(#remote{cache = Cache} = Remote, Replies, JobQueue, RunQueue) ->
       scan1(Remote, Replies, [{Path,Obj}|JobQueue], RunQueue1)
   end.
 
-read_entries({_,Path,_,{true,Attr},{true,{Obj}},Next}) ->
-  [#entry{path = Path, object = Obj, attr = attr(Attr)}|read_entries(Next)];
-read_entries(void) -> [].
+read_entries_plus({_,Path,_,{true,Attr},{true,{Obj}},Next}) ->
+  case lists:member(Path, bad_segments()) of
+    false -> [#entry{path = Path, object = Obj, attr = attr(Attr)}|read_entries_plus(Next)];
+    true -> read_entries_plus(Next)
+  end;
+read_entries_plus(void) -> [].
 
+read_entries({_Id,Path,_Cookie,Next}) ->
+  case lists:member(Path, bad_segments()) of
+    true -> read_entries(Next);
+    false -> [Path|read_entries(Next)]
+  end;
+read_entries(void) -> [].
 
 
 % scan1(Remote, ScanQueue, WorkQueue) ->
@@ -353,7 +361,6 @@ mkdir_p(#remote{c = C} = Remote, Path) ->
     {ok, {Obj,_}, Remote1} -> {ok, Obj, Remote1}
   catch
     throw:{enoent, Root, Segments} ->
-      io:format("create ~p under ~p~n",[Segments, Root]),
       {ok, Obj} = mkdir_p_r(C, Root, Segments),
       {ok, Obj, Remote}
   end.
