@@ -41,7 +41,8 @@ main(["scan", URL]) ->
 
 main(["read", URL]) ->
   code:add_pathz("ebin"),
-  {match, [Mount,Path]} = re:run(URL, "(.*)//(.*)", [{capture,all_but_first,list}]),
+  Mount = filename:dirname(URL),
+  Path = filename:basename(URL),
   {ok, Remote} = nfs3:init(Mount),
   T1 = erlang:now(),
   {ok, Bin, _Remote1} = nfs3:read_file(Remote, Path),

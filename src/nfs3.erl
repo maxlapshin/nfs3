@@ -44,6 +44,7 @@
 
 
 -include_lib("kernel/include/file.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -export([init/1, read_file/2, scan/1, scan/2, list_dir/2, create/2, write/4, delete_r/2]).
 -export([close/1]).
@@ -321,13 +322,17 @@ scan1_wait(#remote{cache = Cache} = Remote, Replies, JobQueue, RunQueue) ->
   receive
     {Ref, {ok, XDR}} when is_reference(Ref) ->
       {value, {Ref, Path, _Obj}, RunQueue1} = lists:keytake(Ref, 1, RunQueue),
-      {{'NFS3_OK', {_Attr, CV2, {Entries, true}}}, _} = nfs_prot3_xdr:dec_readdirplus3res(XDR, 0),
-      PathEntries = [E#entry{path = join([Path, P])} || #entry{path = P} = E <- read_entries_plus(Entries)],
-      Cache1 = lists:ukeymerge(#entry.path, lists:sort(PathEntries), Cache),
-      SubDirs = [{P,O} || #entry{path = P, object = O, attr = #file_info{type = directory}} <- PathEntries],
-      SubFiles = [P || #entry{path = P, attr = #file_info{type = regular}} <- PathEntries],
-      % io:format("SubDirs: ~p, SubFiles: ~p~n", [[P || {P,_} <- SubDirs], SubFiles]),
-      scan1(Remote#remote{cache = Cache1, cookie_verf = CV2}, SubFiles ++ Replies, SubDirs ++ JobQueue, RunQueue1);
+      case nfs_prot3_xdr:dec_readdirplus3res(XDR, 0) of
+        {{'NFS3_OK', {_Attr, CV2, {Entries, true}}}, _} ->
+          PathEntries = [E#entry{path = join([Path, P])} || #entry{path = P} = E <- read_entries_plus(Entries)],
+          Cache1 = lists:ukeymerge(#entry.path, lists:sort(PathEntries), Cache),
+          SubDirs = [{P,O} || #entry{path = P, object = O, attr = #file_info{type = directory}} <- PathEntries],
+          SubFiles = [P || #entry{path = P, attr = #file_info{type = regular}} <- PathEntries],
+          % io:format("SubDirs: ~p, SubFiles: ~p~n", [[P || {P,_} <- SubDirs], SubFiles]),
+          scan1(Remote#remote{cache = Cache1, cookie_verf = CV2}, SubFiles ++ Replies, SubDirs ++ JobQueue, RunQueue1);
+        {{'NFS3ERR_STALE',_},_} ->
+          scan1(Remote, Replies, JobQueue, RunQueue1)
+      end;
     {Ref, {error, timeout}} ->
       {value, {Ref, Path, Obj}, RunQueue1} = lists:keytake(Ref, 1, RunQueue),
       io:format("timeout scan ~s~n",[Path]),
@@ -413,6 +418,9 @@ create(#remote{c = C, cache = Cache} = Remote, Path, Options) ->
 write(#remote{c = C} = _Remote, Obj, Offset, Data) when is_binary(Data) ->
   {ok, {'NFS3_OK', _Reply}} = nfs_prot3_clnt:nfsproc3_write_3(C, {{Obj}, Offset, size(Data), 'UNSTABLE', Data}),
   ok.
+
+
+
 
 
 delete_r(#remote{root = Root} = Remote, Path) ->
