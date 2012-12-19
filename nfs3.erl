@@ -68,8 +68,8 @@ main(["delete", URL]) ->
 
 
 main([]) ->
-  io:format("scan nfs://uid:gid@host/mount//root\n"),
-  io:format("read nfs://uid:gid@host/mount//path/to/file\n"),
-  io:format("write nfs://uid:gid@host/mount//path/to/file text\n"),
-  io:format("delete nfs://uid:gid@host/mount//path/to/file\n"),
+  io:format("scan nfs://uid:gid@host/mount/root\n"),
+  io:format("read nfs://uid:gid@host/mount/path/to/file\n"),
+  io:format("write nfs://uid:gid@host/mount/path/to/file text\n"),
+  io:format("delete nfs://uid:gid@host/mount/path/to/file\n"),
   ok.

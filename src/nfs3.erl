@@ -46,7 +46,7 @@
 -include_lib("kernel/include/file.hrl").
 
 -export([init/1, read_file/2, scan/1, scan/2, list_dir/2, create/2, write/4, delete_r/2]).
-
+-export([close/1]).
 
 -record(fsinfo, {
   rtmax,
@@ -90,11 +90,12 @@ init("nfs://"++URL) ->
   {ok,M} = rpc_client:open(Host,100005,3,udp),
   {ok,void} = mount3_clnt:mountproc_null_1(M), % Check if server is ok
   {ok, Mounts_} = mount3_clnt:mountproc_export_3(M),
-  _Mounts = unpack_mounts(Mounts_),
+  Mounts = unpack_mounts(Mounts_),
   % lists:keyfind(Path, 1, Mounts) =/= false orelse error({no_export,Path,Mounts}),
-  {MountRoot, MountPath} = case binary:split(iolist_to_binary(Path), <<"//">>) of
+  PathBin = iolist_to_binary(Path),
+  {MountRoot, MountPath} = case binary:split(PathBin, <<"//">>) of
     [MR, MP] -> {MR, MP};
-    [MR] -> {MR, <<>>}
+    [_MR] -> lookup_in_mounts(PathBin, Mounts)
   end,
   set_auth(M, [{uid,Uid},{gid,Gid}|Options]),
   {ok, {'MNT3_OK',{RealRoot,_}}} = mount3_clnt:mountproc_mnt_3(M,MountRoot),
@@ -122,6 +123,22 @@ init("nfs://"++URL) ->
   {ok, Root, Remote2} = mkdir_p(Remote1, MountPath),
 
   {ok, Remote2#remote{root = Root}}.
+
+lookup_in_mounts(Path, [{MountRoot, _}|Mounts]) ->
+  S = size(MountRoot),
+  case Path of
+    <<MountRoot:S/binary, "/", MountPath/binary>> -> {MountRoot, MountPath};
+    _ -> lookup_in_mounts(Path, Mounts)
+  end;
+
+lookup_in_mounts(Path, []) -> error({no_suitable_nfs_exports, Path}).
+
+
+
+
+
+close(#remote{c = C}) ->
+  rpc_client:close(C).
 
 
 
